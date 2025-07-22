@@ -1,0 +1,495 @@
+---
+title: "Spotlight Election Chatbot Final Report and Synopsis"
+author:
+  - name: Sodi E. Kroehler
+    email: sek188pitt.edu
+    affiliation: 
+      - name: University of Pittsburgh
+        department: PICSO Lab
+  - name: Madeline I. Franz
+    email: mxfranz@pitt.edu
+    affiliation:
+      - name: University of Pittsburgh
+        department: Pitt Cyber
+  - name: Nefriana
+    affiliation:
+      - name: University of Pittsburgh
+        department: PICSO Lab 
+  - name: Dr. Elise Silva, PhD, MLIS
+    affiliation:
+      - name: University of Pittsburgh
+        department: Pitt Cyber
+  - name: Dr. Beth Schwanke, JD
+    affiliation:
+      - name: University of Pittsburgh
+        department: Pitt Cyber
+  - name: Dr. Yuru Lin
+    affiliation:
+      - name: University of Pittsburgh
+        department: PICSO Lab
+
+format: html
+editor: visual
+---
+
+## Introduction
+
+From August through November 5th, 2024, the Spotlight News team ran a political information chatbot on their website, to help answer questions related to the 2024 presidential election. The queries and responses were saved and an anonymized version was released to team comprised of members from the Pitt Cyber team and the PICSO lab for analysis. Below is that analysis.
+
+
+
+## Overview
+
+```{r, include=FALSE}
+library(tidyverse)
+library(yardstick)
+library(knitr)
+library(irr)
+```
+
+```{r, include=FALSE}
+odf <- readr::read_csv("./orig_file.csv")
+aidf <- readr::read_csv("./spotlight_final_fullcoded.csv")
+cdf <- readr::read_csv("./backendsheet.csv")
+
+cdf <- cdf %>%
+  mutate(trust_flag = if_else(is.na(trust_flag), "[NOFLAG]", trust_flag))
+```
+
+```{r setup-summary-vars, include=FALSE}
+utterance_words <- odf %>%
+  filter(!is.na(user_query)) %>%
+  mutate(word_count = sapply(strsplit(user_query, "\\s+"), length)) %>%
+  pull(word_count)
+avg_utterance_words <- mean(utterance_words)
+max_utterance_words <- max(utterance_words)
+
+num_duplicate_utterances <- sum(duplicated(odf$user_query))
+
+# Duplicates within the same conversation
+within_convo_duplicates <- odf %>%
+  group_by(conversation_id) %>%
+  summarise(dupes = sum(duplicated(user_query)), .groups = "drop") %>%
+  summarise(total = sum(dupes)) %>%
+  pull(total)
+
+# Answer word counts
+answer_words <- sapply(strsplit(odf$response, "\\s+"), length)
+avg_answer_words <- mean(answer_words)
+max_answer_words <- max(answer_words)
+
+# Duplicate utterances with different answers
+utterance_answer_pairs <- odf %>%
+  select(user_query, response) %>%
+  distinct()
+utterance_counts <- utterance_answer_pairs %>%
+  group_by(user_query) %>%
+  summarise(n = n(), .groups = "drop")
+utterances_with_diff_answers <- sum(utterance_counts$n > 1)
+
+# Timing using created_at
+odf$created_at <- as.POSIXct(odf$created_at <- as.POSIXct(odf$created_at, format = "%m/%d/%y %H:%M", tz = "UTC"))
+conversation_durations <- odf %>%
+  group_by(conversation_id) %>%
+  summarise(duration = as.numeric(max(created_at) - min(created_at)), .groups = "drop")
+
+avg_convo_duration <- mean(conversation_durations$duration, na.rm = TRUE)
+max_convo_duration <- max(conversation_durations$duration, na.rm = TRUE)
+earliest_time <- min(odf$created_at, na.rm = TRUE)
+latest_time <- max(odf$created_at, na.rm = TRUE)
+```
+  
+#### Conversations
+Groups of user utterances were grouped based on the conversation they occurred in, where a conversation is defined as a single user engaging with the bot in a contiguous space of time. A total of `r length(unique(odf$conversation_id))` unique conversations were recorded, with the longest conversation containing `r max(table(odf$conversation_id))` utterances. The average conversation length was `r round(mean(table(odf$conversation_id)), 2)` utterances.
+  
+#### Utterances
+Utterances had an average word count of `r round(avg_utterance_words, 2)` words, with the longest utterance being `r max_utterance_words` words long. There were `r num_duplicate_utterances` duplicate utterances, with `r within_convo_duplicates` of those being exact duplicates within the same conversation. 
+  
+#### Bot Routing  
+Due to concerns about hallucination, trust, and other ethical issues, the Spotlight team structured the bot only to match user questions to pre-defined question/answer pairs. This predefined list, while expansive, did not contain every question asked by users. The tool recorded routing information for each utterance, either "exact" if it directly matched a question, or something else if it didn't. A histogram of these values is available below:
+```{r, echo=FALSE}
+
+odf %>%
+  group_by(routing) %>%
+  summarise(n = n()) %>%
+  ggplot(aes(x = routing, y = n)) +
+  geom_col() +
+  labs(title = "Routing Types", x = "Routing Type", y = "Count") +
+  theme_minimal()
+```
+Note that human coders did not find these automatically created values to be very accurate. A further discussion of this is available in the human coding section.  
+
+#### Bot Answers  
+Answers seemed to be generatively reworded from the predefined master list, and gave very similar, but still slightly different responses to the same question. Overall, the answers had a mean length of `r round(avg_answer_words, 2)` words, with the longest answer being `r max_answer_words` words long.There were `r utterances_with_diff_answers` utterances which were exact duplicates but received different bot answers.  
+
+#### Timing  
+
+Conversations lasted an average of `r mean(avg_convo_duration, 2)` seconds, with the longest conversation lasting `r round(max_convo_duration, 2)` seconds. The earliest given utterance was at `r min(odf$created_at, na.rm = TRUE)` and the latest utterance was at `r max(odf$created_at, na.rm = TRUE)`. Below is a line graph showing the frequency of utterances, per day, over the full time period.
+```{r, echo=FALSE}
+
+odf %>%
+  mutate(date = as.Date(created_at)) %>%
+  group_by(date) %>%
+  summarise(n = n()) %>%
+  ggplot(aes(x = date, y = n)) +
+  geom_line() +
+  labs(title = "Utterances per Day", x = "Date", y = "Count") +
+  theme_minimal()
+```
+
+
+
+## Human Coding
+
+Three human coders were employed to manually code a subgroup of these utterance/answer pairs. Coding occurred across five rounds, and lasted for five months. Meetings were held after each round to review agreement and process. All codebooks and examples were refined iteratively. The rounds of coding, as well as details about them, are summarized in the table below:
+
+```{r round-summary-table, echo=FALSE}
+
+
+rounds <- data.frame(
+  Round = 1:5,
+  Coders = c(
+    "Sodi, Maddy, Nefriana",
+    "Sodi, Maddy, Nefriana",
+    "Sodi, Maddy, Nefriana",
+    "Sodi, Maddy, Nefriana",
+    "Maddy only"
+  ),
+  Utterances = c(
+    "50 (shared)",
+    "50 (shared)",
+    "50 (shared)",
+    "50 (shared)",
+    nrow(cdf %>% filter(coding_stage == 5.0 & !is.na(primary_code)))
+  ),
+  Sampling_Notes = c(
+    "Weighted: recency (90%) + low-confidence (10%)",
+    "Same weights; not in R1; conversation_size = 1",
+    "Same weights; not in R1/R2; conv size ≤ 6",
+    "no weights; not in R1–R3",
+    "Random from all uncoded utterances; no weights"
+  ),
+  Coding_Dates = c(
+    "Dec 3–5",
+    "Dec 9–12",
+    "Dec 9–Jan 16",
+    "Jan 29–Feb 6",
+    "Feb 26–May 4"
+  ),
+  Meeting_Date = c(
+    "Dec 7",
+    "Dec 13",
+    "Jan 17",
+    "Feb 10",
+    "N/A"
+  ),
+  Tooling = c(
+    "Manual",
+    "Manual",
+    "AppSheet",
+    "AppSheet",
+    "AppSheet"
+  ),
+  stringsAsFactors = FALSE
+)
+
+kable(
+  rounds,
+  caption = "Summary of Annotation Rounds",
+  align = "l"
+)
+```
+
+The Appsheet was a tool created in google Appsheets which helped organize and streamlined the coding prcoess. Functionally, all codes were stored in a google sheets, and some coders preferred to edit direclty in the sheet rather than use the app.
+
+### Coding Specifics
+All utterance/answer pairs were coded for the following categories:  
+- **Primary Code**: The general category of the utterance.  
+- **Secondary Code**: A more specific sub-category of the utterance.  
+- **Sentiment**: Usually "NEUTRAL" but marked as "POSITIVE" or "NEGATIVE" in more noteworthy cases.  
+- **Answer Rating**: How good the bot's answer was, and whether this was acceptable given the context.  
+- **Flags**: A series of flags, described below.  
+
+#### Primary Codes
+The primary codes were broad categories of the utterance, and were defined as follows:  
+  
+| Category                             | Code |
+|--------------------------------------|------|
+| Candidate and Campaign Information   | [G]  |
+| Policies, Positions, and Propositions| [P]  |
+| Elections Logistics and Procedures   | [EL] |
+| Voter Motivation and Civic Engagement| [V]  |
+| Election Analysis and Insights       | [EA] |
+| Miscellaneous                        | [M]  |
+#### Secondary Codes
+The secondary codes were more specific sub-categories of the utterance, and were defined as follows:
+
+| Secondary Code     | Description                                  | Primary Code |
+|--------------------|----------------------------------------------|--------------|
+| [Ind Basic]        | Basic Information, Individual Campaign        | [G]          |
+| [Elect Basic]      | Basic Information, Election                   | [G]          |
+| [Fed Basic]        | Basic Information, Federal Races – Senate     | [G]          |
+| [Pres Basic]       | Basic Information, Federal Races – Presidential| [G]         |
+| [House Basic]      | Basic Information, Federal Races – House      | [G]          |
+| [State Basic]      | Basic Information, Statewide Races            | [G]          |
+| [Local Basic]      | Basic Information, Local Races                | [G]          |
+| [Cand Hist]        | Candidate History                             | [G]          |
+| **---**            | **---**                                       | **---**      |
+| [Cand Comp]        | Candidate Comparisons and Policy Differences  | [P]          |
+| [Cand Pos]         | Candidate Positions on Issues                 | [P]          |
+| [Iss Spec]         | Issue-Specific                                | [P]          |
+| [St/Loc Prop]      | State and Local Propositions                  | [P]          |
+| [P Oth]            | Other                                         | [P]          |
+| **---**            | **---**                                       | **---**      |
+| [Voter Reg]        | Voter Registration                            | [EL]         |
+| [Mail-in]          | Mail-in Ballots                               | [EL]         |
+| [EV]               | Early Voting                                  | [EL]         |
+| [Polling Loc/Time] | Polling Locations and Times                   | [EL]         |
+| [Voting Ac]        | Voting Accessibility                          | [EL]         |
+| [Res/Rep/Time]     | Results and Reporting Timelines               | [EL]         |
+| [Rec/Res]          | Recounts and Contested Results                | [EL]         |
+| [Voting Req]       | Voting/Polling Place Requirements and Rules   | [EL]         |
+| [EL Oth]           | Other                                         | [EL]         |
+| **---**            | **---**                                       | **---**      |
+| [Reas]             | Reasons for Voting, Civic Duty                | [V]          |
+| **---**            | **---**                                       | **---**      |
+| [Polling Fore]     | Polling and Election Forecasts                | [EA]         |
+| [Endor/Infl]       | Endorsements and Influences                   | [EA]         |
+| [Deb]              | Debates                                       | [EA]         |
+| **---**            | **---**                                       | **---**      |
+| [Non-elect]        | Non-election Query                            | [M]          |
+| [Oth]              | Other                                         | [M]          |
+
+#### Flags
+
+There were 5 possible flags, as described below:
+
+| Flag Name          | Description                                                                                                                      | Required?                  |
+|--------------------|----------------------------------------------------------------------------------------------------------------------------------|----------------------------|
+| [Trust Flag]       | If user seems dubious, there could be conspiratorial thinking, or even just the answer given was misleading.                      | Yes (required for every row) |
+| [Context]          | If the context of the conversation is important to why we coded as we did.                                                       | Optional                   |
+| [RepeatedQuestion] | If the user is repeating their question exactly. This might indicate accidental misclick, or jailbreaking attempts.              | Optional                   |
+| [WackAnswer]       | Occasionally the bot gave very odd answers that didn't match the question at all.                                                | Optional                   |
+
+#### Answer Ratings
+  
+The answer ratings where given as a two-part array, as follows: 
+  
+| Suggestion Level | Bot Answer Description                                   | Codes                       |
+|------------------|----------------------------------------------------------|-----------------------------|
+| **Suggestion**   | Suggestions align with user query/intent                 | [Suggestion, Align]          |
+|                  | Suggestions seem to miss the point of the user's question| [Suggestion, Not Align]      |
+| **Near**         | Acceptable Answer                                        | [Near, Accept]               |
+|                  | Not Acceptable Answer                                    | [Near, Not Accept]           |
+| **Exact**        | Acceptable Answer                                        | [Exact, Accept]              |
+|                  | Not Acceptable Answer                                    | [Exact, Not Accept]          |
+| **No Match**     | Bot should have been able to answer                      | [No Match, Should Ans]       |
+|                  | Appropriate that bot did not answer                      | [No Match, Approp]           |
+
+
+
+
+### Agreement Statistics
+
+At each post-round meeting, we compared our answers, and tried to come to agreement on any differences. Below is shown how agreement percent varied over these rounds. We only show a subset of the complete code types  (primary code, secondary code, trust flag), as these were the only required code types, and we feel they are the most important for future work.
+```{r agreement-table-calc, echo=FALSE}
+rounds <- 1:5
+
+
+results <- lapply(rounds, function(round_num) {
+  # Filter for round
+  round_data <- cdf %>% filter(coding_stage == round_num)
+  
+  # Count total unique sIDs
+  total_sids <- round_data %>% pull(sID) %>% unique() %>% length()
+  
+  check_agreement <- function(code_col) {
+    # pivot wider to get one row per sID, columns are coder codes
+    wide <- round_data %>%
+      select(sID, coder_name, !!sym(code_col)) %>%
+      pivot_wider(names_from = coder_name, values_from = !!sym(code_col))
+    
+    # agreement count: number of sIDs where all coders have the same non-NA code
+    agree_count <- wide %>%
+      filter(if_all(everything(), ~ !is.na(.))) %>% 
+      rowwise() %>%
+      filter(length(unique(c_across(-sID))) == 1) %>%
+      nrow()
+    
+    agree_percent <- agree_count / total_sids * 100
+    
+    list(agree_count = agree_count, agree_percent = agree_percent)
+  }
+  
+  get_fliess <- function(code_col) {
+    # pivot wider to get one row per sID, columns are coder codes
+    wide <- round_data %>%
+      select(sID, coder_name, !!sym(code_col)) %>%
+      pivot_wider(names_from = coder_name, values_from = !!sym(code_col))
+    ratings <- wide %>% select(-sID)
+    kappam.fleiss(na.omit(ratings))
+  }
+  
+  primary_agree <- check_agreement("primary_code")
+  secondary_agree <- check_agreement("sec_codes")
+  trust_agree <- check_agreement("trust_flag")
+  primary_fliess <- get_fliess("primary_code")
+  secondary_fliess <- get_fliess("sec_codes")
+  trust_fliess <- get_fliess("trust_flag")
+  
+  data.frame(
+    round = round_num,
+    primary_agree_count = primary_agree$agree_count,
+    primary_agree_percent = primary_agree$agree_percent,
+    secondary_agree_count = secondary_agree$agree_count,
+    secondary_agree_percent = secondary_agree$agree_percent,
+    trust_agree_count = trust_agree$agree_count,
+    trust_agree_percent = trust_agree$agree_percent,
+    kappa_primary = primary_fliess$value,
+    kappa_secondary = secondary_fliess$value,
+    kappa_trust = trust_fliess$value
+  )
+})
+
+full_agreements <- bind_rows(results)
+print(full_agreements)
+```
+
+```{r}
+agreement_long <- full_agreements %>%
+  select(round, primary_agree_percent, secondary_agree_percent, trust_agree_percent) %>%
+  pivot_longer(-round, names_to = "type", values_to = "agreement_pct") %>%
+  mutate(type = case_when(
+    str_detect(type, "primary") ~ "Primary",
+    str_detect(type, "secondary") ~ "Secondary",
+    str_detect(type, "trust") ~ "Trust"
+  ))
+
+ggplot(agreement_long, aes(x = factor(round), y = agreement_pct, fill = type)) +
+  geom_col(position = "dodge") +
+  labs(title = "Percent Agreement by Round", x = "Round", y = "% Agreement", fill = "Code Type") +
+  theme_minimal()
+```
+  
+For a fuller perspective, here is the Fliess Kappa for each code type, by round.
+```{r}
+kappa_long <- full_agreements %>%
+  select(round, kappa_primary, kappa_secondary, kappa_trust) %>%
+  pivot_longer(-round, names_to = "type", values_to = "kappa") %>%
+  mutate(type = case_when(
+    type == "kappa_primary" ~ "Primary",
+    type == "kappa_secondary" ~ "Secondary",
+    type == "kappa_trust" ~ "Trust"
+  ))
+
+ggplot(kappa_long, aes(x = factor(round), y = kappa, fill = type)) +
+  geom_col(position = "dodge") +
+  geom_hline(yintercept = c(0.2, 0.4, 0.6, 0.8), linetype = "dashed", color = "gray50") +
+  annotate("text", x = max(kappa_long$round) + 0.3, y = c(0.2, 0.4, 0.6, 0.8), 
+           label = c("Slight", "Fair", "Moderate", "Substantial"), 
+           hjust = 0, vjust = -0.2, size = 3, color = "gray50") +
+  labs(
+    title = "Cohen's/Fleiss' Kappa by Round and Code Type",
+    x = "Round",
+    y = "Kappa Score",
+    fill = "Code Type"
+  ) +
+  coord_cartesian(ylim = c(0, 1)) +
+  theme_minimal()
+
+```
+
+
+
+round1, nefriana, maddy, sodi, all code 50. sodi took 70 mins, maddie 40 mins, nefriana 50 mins. full dataset was filtered as: only english, random_state 42 but with a weighted probabability that favored more recent utterances by 90% and a low confidence routing (i.e. "suggestion") by 10%. these queries were split and sent to coders on december 3, coding was completed by the following thursday, 12/5, and a meeting was held on 12/7 to measure agreement as well as discuss coding process. everyone coded the same set of 50 utterances. 
+round 2 everyone codes the same amount. these were sampled with the same weights as round1, but only for utterances not already coded in round 1, and also in a conversation with of size 1. rows were sampled and released on decemeber 9th, coding was completed again by that friday, 12/12, and a meeting was held on 12/13 to discuss and compare codes.
+round 3 also included conversations under size 7, and was sampled with the same weights as round 2, but only for utterances not already coded in rounds 1 or 2. there were also 50 codes in this round. codes for this set were also released with round 2 codes. additionally, by this time an app was created, using google appsheet, to code easier. note that this occured over winter break, so coding was not completed until Jan 16. a meeting was held on jan 17 to discuss.
+we had a larger meeting between with everyone from the team on Jan 31st to make several new decisions related to coding discrepancies. 
+round 4 consisted of a final set of 50 codes, sampled with the same weights and characteristics as round 3, but only for utterances not already coded in rounds 1, 2, or 3. codes were released on jan 29 and coding was completed by Feb 6.as meeting was held on feb 10 to discuss the codes and differences.
+round 5 was a final round of coding and was completed by only one coder - maddie from feb 26 ending at May 4th. the did not use any sampling weights, and were randomly sampled from all utterance pairs not yet coded.
+
+### AI Classifier
+  
+After obtaining these codes, an LLM was fine-tuned based on the gold labels provided by the coders. Weights for this model are available on the github, and can be easily extended to label new utterances, with only minimal preprocessing.
+
+#### Classifier Details
+We began with the TinyLlama/TinyLlama-1.1B-Chat-v1.0 model, using the same as an encoder. A good number of different parameter values and architectures were experimented with. The final model was trained over 3 epochs, with a per-batch size of 4, a learning rate of 2
+
+
+#### Classifier Performance
+
+```{r, echo=FALSE}
+caidf <- aidf %>%
+  filter(!is.na(model_code) & !is.na(human_code)) %>%
+  mutate(
+    model_code = factor(model_code),
+    human_code = factor(human_code, levels = levels(model_code))  # match levels
+  )
+
+df_tbl <- tibble(
+  truth = caidf$human_code,
+  prediction = caidf$model_code
+)
+
+per_class_metrics <- df_tbl %>% 
+  group_by(truth) %>% 
+  summarize(
+    precision = precision_vec(truth, prediction),
+    recall = recall_vec(truth, prediction),
+    f_meas = f_meas_vec(truth, prediction)
+  )
+
+
+support <- df_tbl %>%
+  count(truth, name = "support") %>%
+  rename(.metric = truth)
+
+report <- per_class_metrics %>%
+  left_join(support, by = c("truth" = ".metric")) %>%
+  rename(class = "truth")
+
+
+```
+
+```{r, echo=FALSE}
+macro_metrics <- metric_set(precision, recall, f_meas)(
+  df_tbl, truth = truth, estimate = prediction, estimator = "macro"
+) %>%
+  select(.metric, .estimate) %>%
+  pivot_wider(names_from = .metric, values_from = .estimate) %>%
+  mutate(class = "macro avg")
+
+# Micro
+micro_metrics <- metric_set(precision, recall, f_meas)(
+  df_tbl, truth = truth, estimate = prediction, estimator = "micro"
+) %>%
+  select(.metric, .estimate) %>%
+  pivot_wider(names_from = .metric, values_from = .estimate) %>%
+  mutate(class = "micro avg")
+
+# Weighted
+weighted_metrics <- metric_set(precision, recall, f_meas)(
+  df_tbl, truth = truth, estimate = prediction, estimator = "macro_weighted"
+) %>%
+  select(.metric, .estimate) %>%
+  pivot_wider(names_from = .metric, values_from = .estimate) %>%
+  mutate(class = "weighted avg")
+
+# Combine all
+summary_rows <- bind_rows(macro_metrics, micro_metrics, weighted_metrics) %>%
+  mutate(support = nrow(df_tbl)) %>%
+  select(class, precision, recall, f_meas, support)
+```
+
+
+```{r, echo=FALSE}
+
+
+final_report <- bind_rows(report, summary_rows) %>%
+  select(class, precision, recall, f_meas, support)
+
+print(final_report)
+```
+
+
+things to do yet:

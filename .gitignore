@@ -1,0 +1,46 @@
+venv/**
+# History files
+.Rhistory
+.Rapp.history
+
+# Session data
+.RData
+.Ruserdata
+
+# RStudio files
+.Rproj.user/
+*.Rproj
+
+# R packages
+.Rbuildignore
+
+# Output files
+*.utf8.md
+*.knit.md
+*.pdf
+*.html
+
+# Cache and logs
+*.log
+*.aux
+*.out
+*.toc
+*.gz
+*.cache
+*.Rcheck/
+*.tar.gz
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Quarto / RMarkdown cache and output
+_cache/
+*.nb.html
+*.qmd.md
+*.qmd.knit.md
+*.qmd.html
+*.Rmd.md
+*.Rmd.knit.md
+*.Rmd.html
+*.docx
